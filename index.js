@@ -20,7 +20,31 @@ const client = new MongoClient(uri, {
 
 async function run() {
   try {
-    // Connect the client to the server	(optional starting in v4.7)
+    const db = client.db("sage");
+    const usersCollection = db.collection("users");
+    const lessonsCollection = db.collection("lessons");
+
+     app.post("/users", async (req, res) => {
+      const user = req.body;
+      user.createdAt = new Date();
+      const email = user.email;
+      const userExists = await usersCollection.findOne({ email });
+      if (userExists) {
+        return res.send({ message: "user exists" });
+      }
+      const result = await usersCollection.insertOne(user);
+      res.send(result);
+    });
+    app.get("/users", async (req, res) => {
+      const email = req.query.email;
+      const query = {};
+      if (email) {
+        query.email = email;
+      }
+      const result = await usersCollection.find(query).toArray();
+      res.send(result);
+    });
+    
     await client.connect();
     // Send a ping to confirm a successful connection
     await client.db("admin").command({ ping: 1 });
