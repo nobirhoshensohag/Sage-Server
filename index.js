@@ -60,22 +60,22 @@ async function run() {
       res.send(result);
     });
     app.get("/lessons", async (req, res) => {
-      const isPrivate = req.query.isPrivate;
-       const {
-        email,
-        limit = 0,
-        skip = 0,
-        sort = "postedAt",
-        order,
-      } = req.query;
+       const { isPrivate, tone, category } = req.query;
+      const { email, limit = 0, skip = 0, sort = "postedAt" } = req.query;
       const query = {};
       const sortOption = {};
-      sortOption[sort] = order === "asc" ? 1 : -1;
+      sortOption[sort || "postedAt"] = -1;
       if (isPrivate) {
         query.isPrivate = isPrivate;
       }
       if (email) {
         query.email = email;
+      }
+       if (tone) {
+        query.tone = tone;
+      }
+      if (category) {
+        query.category = category;
       }
       const result = await lessonsCollection
         .find(query)
