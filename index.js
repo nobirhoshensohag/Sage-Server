@@ -50,6 +50,17 @@ async function run() {
       res.send(result);
     });
 
+     app.patch("/users/:id", async (req, res) => {
+      const userInfo = req.body;
+      const id = req.params.id;
+      const query = { _id: new ObjectId(id) };
+      const update = {
+        $set: userInfo,
+      };
+      const result = await usersCollection.updateOne(query, update);
+      res.send(result);
+    });
+
      //lessons related apis
     app.post("/lessons", async (req, res) => {
       const lesson = req.body;
@@ -265,9 +276,10 @@ async function run() {
         mode: "payment",
         metadata: {
           email: paymentInfo.email,
-        },
+         product_data: { name: "Be a Premium Member" }
+         },
         customer_email: paymentInfo.email,
-        success_url: `${process.env.SITE_DOMAIN}/payment-success`,
+        success_url: `${process.env.SITE_DOMAIN}/payment-success?session_id={CHECKOUT_SESSION_ID}`,
         cancel_url: `${process.env.SITE_DOMAIN}/payment-cancelled`,
       });
       res.send({ url: session.url });
