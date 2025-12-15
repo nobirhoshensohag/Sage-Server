@@ -113,6 +113,53 @@ async function run() {
       const count = await lessonsCollection.countDocuments(query);
       res.send({ result, total: count });
     });
+
+    app.get("/top-contributors-week", async (req, res) => {
+      try {
+        const oneWeekAgo = new Date();
+        oneWeekAgo.setDate(oneWeekAgo.getDate() - 7);
+
+        const lessons = await lessonsCollection
+          .find({ postedAt: { $gte: oneWeekAgo } })
+          .toArray();
+
+        const freq = {};
+        lessons.forEach((lesson) => {
+          const email = lesson.email;
+          if (!freq[email]) {
+            freq[email] = {
+              email: lesson.email,
+              name: lesson.name,
+              authorImage: lesson.authorImage,
+              count: 0,
+            };
+          }
+          freq[email].count++;
+        });
+
+        let contributors = Object.values(freq)
+          .sort((a, b) => b.count - a.count)
+          .slice(0, 4); //top 4
+
+        contributors = await Promise.all(
+          contributors.map(async (contributor) => {
+            const user = await usersCollection.findOne({
+              email: contributor.email,
+            });
+            return {
+              ...contributor,
+              isPremium: user?.isPremium ? "true" : "false",
+            };
+          })
+        );
+
+        res.send({ contributors });
+      } catch (err) {
+        console.error(err);
+        res.status(500).send({ error: "Something went wrong" });
+      }
+    });
+    
     app.get("/lessons/:id", async (req, res) => {
       const id = req.params.id;
       const query = { _id: new ObjectId(id) };
