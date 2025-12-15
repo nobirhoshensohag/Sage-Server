@@ -61,7 +61,13 @@ async function run() {
     });
     app.get("/lessons", async (req, res) => {
       const isPrivate = req.query.isPrivate;
-      const { email, limit = 0, skip = 0, sort = "latest", order } = req.query;
+       const {
+        email,
+        limit = 0,
+        skip = 0,
+        sort = "postedAt",
+        order,
+      } = req.query;
       const query = {};
       const sortOption = {};
       sortOption[sort] = order === "asc" ? 1 : -1;
@@ -73,7 +79,7 @@ async function run() {
       }
       const result = await lessonsCollection
         .find(query)
-        .sort()
+        .sort(sortOption)
         .limit(Number(limit))
         .skip(Number(skip))
         .toArray();
