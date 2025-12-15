@@ -1,16 +1,40 @@
 const express = require("express");
 const app = express();
-require("dotenv").config()
+require("dotenv").config();
 const port = process.env.PORT || 5000;
+const admin = require("firebase-admin");
+
+const serviceAccount = require("./firebase-admin.json");
+
+admin.initializeApp({
+  credential: admin.credential.cert(serviceAccount),
+});
+
 const cors = require("cors");
 app.use(cors());
 app.use(express.json());
 
+const verifyFBToken = async (req, res, next) => {
+  const token = req.headers.authorization;
+
+  if (!token) {
+    return res.status(401).send({ message: "unauthorized access" });
+  }
+
+  try {
+    const idToken = token.split(" ")[1];
+    const decoded = await admin.auth().verifyIdToken(idToken);
+
+    req.decoded_email = decoded.email;
+    next();
+  } catch (err) {
+    return res.status(401).send({ message: "unauthorized access" });
+  }
+};
+
 const { MongoClient, ServerApiVersion, ObjectId } = require("mongodb");
 const uri = `mongodb+srv://${process.env.DB_NAME}:${process.env.DB_PASS}@cluster1.h19g7bt.mongodb.net/?appName=Cluster1`;
-
 const stripe = require("stripe")(process.env.STRIPE_SECRET);
-
 // Create a MongoClient with a MongoClientOptions object to set the Stable API version
 const client = new MongoClient(uri, {
   serverApi: {
@@ -22,6 +46,7 @@ const client = new MongoClient(uri, {
 
 async function run() {
   try {
+    // Connect the client to the server	(optional starting in v4.7)
     const db = client.db("sage");
     const usersCollection = db.collection("users");
     const lessonsCollection = db.collection("lessons");
@@ -29,7 +54,20 @@ async function run() {
     const likesCollection = db.collection("likes");
     const reportsCollection = db.collection("reports");
 
-     app.post("/users", async (req, res) => {
+    const verifyAdmin = async (req, res, next) => {
+      const email = req.decoded_email;
+      const query = { email };
+      const user = await usersCollection.findOne(query);
+
+      if (!user || user.role !== "admin") {
+        return res.status(403).send({ message: "forbidden access" });
+      }
+
+      next();
+    };
+
+    //users related apis
+    app.post("/users", async (req, res) => {
       const user = req.body;
       user.createdAt = new Date();
       const email = user.email;
@@ -49,10 +87,9 @@ async function run() {
       const result = await usersCollection.find(query).toArray();
       res.send(result);
     });
-     const { ObjectId } = require("mongodb")
 
-     app.patch("/users/:id", async (req, res) => {
-        const userId = req.params.id;
+    app.patch("/users/:id", verifyFBToken, async (req, res) => {
+      const userId = req.params.id;
       const { displayName, photoURL } = req.body;
       const userQuery = { _id: new ObjectId(userId) };
 
@@ -63,13 +100,13 @@ async function run() {
 
         const updatedUser = await usersCollection.findOne(userQuery);
         const userEmail = updatedUser.email;
-         await lessonsCollection.updateMany(
+
+        await lessonsCollection.updateMany(
           { email: userEmail },
           {
             $set: { authorImage: photoURL, name: displayName },
           }
         );
-
         await favoritesCollection.updateMany(
           { posterEmail: userEmail },
           { $set: { posterName: displayName, posterImage: photoURL } }
@@ -106,21 +143,49 @@ async function run() {
           .send({ success: false, message: "Update failed", error });
       }
     });
+    app.patch(
+      "/users/:id/role",
+      verifyFBToken,
+      verifyAdmin,
+      async (req, res) => {
+        const { id } = req.params;
+        const { role } = req.body;
 
-     //lessons related apis
-    app.post("/lessons", async (req, res) => {
+        if (!["admin", "user"].includes(role)) {
+          return res.status(400).send({ message: "Invalid role" });
+        }
+
+        const result = await usersCollection.updateOne(
+          { _id: new ObjectId(id) },
+          { $set: { role } }
+        );
+
+        if (result.matchedCount === 0) {
+          return res.status(404).send({ message: "User not found" });
+        }
+
+        res.send({
+          success: true,
+          message: `User role updated to ${role}`,
+        });
+      }
+    );
+
+    //lessons related apis
+    app.post("/lessons", verifyFBToken, async (req, res) => {
       const lesson = req.body;
       lesson.comments = [];
       lesson.likes = 0;
       lesson.favorites = 0;
       lesson.postedAt = new Date();
-      lesson.isFeatured = false;
+      lesson.isFeatured = "false";
+      lesson.status = "pending";
 
       const result = await lessonsCollection.insertOne(lesson);
       res.send(result);
     });
     app.get("/lessons", async (req, res) => {
-        const {
+      const {
         isPrivate,
         tone,
         category,
@@ -129,26 +194,35 @@ async function run() {
         skip = 0,
         sort = "postedAt",
         search = "",
+        isFeatured,
+        status,
       } = req.query;
+
       const query = {};
       const sortOption = {};
       sortOption[sort || "postedAt"] = -1;
-
+      if (status) {
+        query.status = status;
+      }
       if (isPrivate) {
         query.isPrivate = isPrivate;
+      }
+      if (isFeatured) {
+        query.isFeatured = isFeatured;
       }
       if (email) {
         query.email = email;
       }
-       if (tone) {
+      if (tone) {
         query.tone = tone;
       }
       if (category) {
         query.category = category;
       }
-       if (search) {
+      if (search) {
         query.title = { $regex: search, $options: "i" };
       }
+
       const result = await lessonsCollection
         .find(query)
         .sort(sortOption)
@@ -159,7 +233,6 @@ async function run() {
       const count = await lessonsCollection.countDocuments(query);
       res.send({ result, total: count });
     });
-
     app.get("/top-contributors-week", async (req, res) => {
       try {
         const oneWeekAgo = new Date();
@@ -212,24 +285,114 @@ async function run() {
       const result = await lessonsCollection.findOne(query);
       res.send(result);
     });
-    app.patch("/lessons/:id", async (req, res) => {
+    app.patch("/lessons/:id", verifyFBToken, async (req, res) => {
       const updatedLesson = req.body;
+      updatedLesson.postedAt = new Date();
       updatedLesson.commentedAt = new Date();
       const id = req.params.id;
       const query = { _id: new ObjectId(id) };
+
       const update = {
-        $push: {
-          comments: {
-            $each: [updatedLesson],
-            $position: 0,
-          },
+        $addToSet: {
+          comments: updatedLesson,
         },
       };
       const result = await lessonsCollection.updateOne(query, update);
       res.send(result);
     });
-     
-      app.delete("/lessons/:id", async (req, res) => {
+    app.patch(
+      "/lessons/:id/status",
+      verifyFBToken,
+      verifyAdmin,
+      async (req, res) => {
+        try {
+          const { id } = req.params;
+          const { status } = req.body;
+
+          // Validate status
+          const allowedStatus = ["pending", "approved", "rejected"];
+          if (!allowedStatus.includes(status)) {
+            return res.status(400).send({ message: "Invalid status value" });
+          }
+
+          const result = await lessonsCollection.updateOne(
+            { _id: new ObjectId(id) },
+            {
+              $set: {
+                status,
+                statusUpdatedAt: new Date(),
+              },
+            }
+          );
+
+          if (result.matchedCount === 0) {
+            return res.status(404).send({ message: "Lesson not found" });
+          }
+
+          res.send({
+            success: true,
+            message: `Lesson status updated to ${status}`,
+          });
+        } catch (error) {
+          console.error("Status update error:", error);
+          res.status(500).send({ message: "Failed to update lesson status" });
+        }
+      }
+    );
+    app.patch(
+      "/lessons/:id/featured",
+      verifyFBToken,
+      verifyAdmin,
+      async (req, res) => {
+        try {
+          const { id } = req.params;
+          const { isFeatured } = req.body;
+
+          const result = await lessonsCollection.updateOne(
+            { _id: new ObjectId(id) },
+            {
+              $set: {
+                isFeatured,
+                featuredAt: new Date(),
+              },
+            }
+          );
+
+          if (result.matchedCount === 0) {
+            return res.status(404).send({ message: "Lesson not found" });
+          }
+
+          res.send({ success: true, isFeatured });
+        } catch (error) {
+          console.error("Feature update failed", error);
+          res.status(500).send({ message: "Failed to update featured status" });
+        }
+      }
+    );
+    app.patch("/lessons/:id/edit", verifyFBToken, async (req, res) => {
+      const id = req.params.id;
+      const updatedLesson = req.body;
+
+      const result = await lessonsCollection.updateOne(
+        { _id: new ObjectId(id) },
+        {
+          $set: {
+            title: updatedLesson.title,
+            description: updatedLesson.description,
+            category: updatedLesson.category,
+            tone: updatedLesson.tone,
+            isPrivate: updatedLesson.isPrivate,
+            isPremiumAccess: updatedLesson.isPremiumAccess,
+            image: updatedLesson.image,
+            updatedAt: new Date(),
+          },
+        }
+      );
+
+      res.send(result);
+    });
+
+    app.delete("/lessons/:id", verifyFBToken, async (req, res) => {
       const id = req.params.id;
       const query = { _id: new ObjectId(id) };
       const result = await lessonsCollection.deleteOne(query);
@@ -243,7 +406,7 @@ async function run() {
     });
 
     //favorite related apis
-    app.post("/favorites", async (req, res) => {
+    app.post("/favorites", verifyFBToken, async (req, res) => {
       const favorite = req.body;
       favorite.favoriteAt = new Date();
       const result = await favoritesCollection.insertOne(favorite);
@@ -274,8 +437,7 @@ async function run() {
       const result = await favoritesCollection.findOne(query);
       res.send(result);
     });
-
-     app.patch("/favorites/:postId", async (req, res) => {
+    app.patch("/favorites/:postId", verifyFBToken, async (req, res) => {
       const postId = req.params.postId;
       const query = { postId: postId };
       const { title, image } = req.body;
@@ -285,8 +447,7 @@ async function run() {
       const result = await favoritesCollection.updateMany(query, update);
       res.send(result);
     });
-
-    app.delete("/favorites/:id", async (req, res) => {
+    app.delete("/favorites/:id", verifyFBToken, async (req, res) => {
       const id = req.params.id;
       const query = { _id: new ObjectId(id) };
       const favoriteDoc = await favoritesCollection.findOne({
@@ -303,12 +464,12 @@ async function run() {
         $inc: { favorites: -1 },
       };
       const favoritesCount = await lessonsCollection.updateOne(filter, update);
-      console.log("result and likesCount", result);
+
       res.send({ result, favoritesCount });
     });
 
     //likes related apis
-    app.post("/likes", async (req, res) => {
+    app.post("/likes", verifyFBToken, async (req, res) => {
       const like = req.body;
       like.likedAt = new Date();
 
@@ -318,7 +479,7 @@ async function run() {
         $inc: { likes: 1 },
       };
       const likesCount = await lessonsCollection.updateOne(filter, update);
-      console.log("result and likesCount", result, likesCount);
+
       res.send({ result, likesCount });
     });
     app.get("/likes", async (req, res) => {
@@ -333,7 +494,7 @@ async function run() {
         query.postId = postId;
       }
       const result = await likesCollection.find(query).toArray();
-      console.log(result);
+
       res.send(result);
     });
     app.get("/likes/:id", async (req, res) => {
@@ -342,7 +503,8 @@ async function run() {
       const result = await likesCollection.findOne(query);
       res.send(result);
     });
-    app.delete("/likes/:id", async (req, res) => {
+
+    app.delete("/likes/:id", verifyFBToken, async (req, res) => {
       const id = req.params.id;
       const query = { _id: new ObjectId(id) };
       const likeDoc = await likesCollection.findOne({ _id: new ObjectId(id) });
@@ -357,35 +519,38 @@ async function run() {
         $inc: { likes: -1 },
       };
       const likesCount = await lessonsCollection.updateOne(filter, update);
-      console.log("result and likesCount", result);
+
       res.send({ result, likesCount });
     });
-    
-     //reports related apis
-    app.post("/reports", async (req, res) => {
+
+    //reports related apis
+    app.post("/reports", verifyFBToken, async (req, res) => {
       const report = req.body;
       report.reportedAt = new Date();
       const result = await reportsCollection.insertOne(report);
       res.send(result);
     });
-    app.get("/reports", async (req, res) => {
+    app.get("/reports", verifyFBToken, verifyAdmin, async (req, res) => {
       const result = await reportsCollection.find().toArray();
+      res.send(result);
+    });
+    app.delete("/reports/:id", verifyFBToken, verifyAdmin, async (req, res) => {
+      const id = req.params.id;
+      const query = { _id: new ObjectId(id) };
+      const result = await reportsCollection.deleteOne(query);
       res.send(result);
     });
 
     //payment related apis
-    app.post("/create-checkout-session", async (req, res) => {
+    app.post("/payment-checkout-session", async (req, res) => {
       const paymentInfo = req.body;
       const session = await stripe.checkout.sessions.create({
         line_items: [
           {
-            // Provide the exact Price ID (for example, price_1234) of the product you want to sell
             price_data: {
-              currency: "USD",
-              unit_amount: 3000,
-              product_data: {
-                name: "Be A Premium Member",
-              },
+              currency: "bdt",
+              unit_amount: 150000,
+              product_data: { name: "Be a Premium Member" },
             },
             quantity: 1,
           },
@@ -393,8 +558,9 @@ async function run() {
         mode: "payment",
         metadata: {
           email: paymentInfo.email,
-         product_data: { name: "Be a Premium Member" }
-         },
+          displayName: paymentInfo.displayName,
+          photoURL: paymentInfo.photoURL,
+        },
         customer_email: paymentInfo.email,
         success_url: `${process.env.SITE_DOMAIN}/payment-success?session_id={CHECKOUT_SESSION_ID}`,
         cancel_url: `${process.env.SITE_DOMAIN}/payment-cancelled`,
@@ -402,14 +568,13 @@ async function run() {
       res.send({ url: session.url });
     });
 
-    await client.connect();
+    // await client.connect();
     // Send a ping to confirm a successful connection
-    await client.db("admin").command({ ping: 1 });
+    // await client.db("admin").command({ ping: 1 });
     console.log(
       "Pinged your deployment. You successfully connected to MongoDB!"
     );
   } finally {
-    // Ensures that the client will close when you finish/error
     // await client.close();
   }
 }
