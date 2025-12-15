@@ -25,6 +25,7 @@ async function run() {
     const lessonsCollection = db.collection("lessons");
     const favoritesCollection = db.collection("favorites");
     const likesCollection = db.collection("likes");
+    const reportsCollection = db.collection("reports");
 
      app.post("/users", async (req, res) => {
       const user = req.body;
@@ -229,7 +230,17 @@ async function run() {
       console.log("result and likesCount", result);
       res.send({ result, likesCount });
     });
-
+    
+     //reports related apis
+    app.post("/reports", async (req, res) => {
+      const report = req.body;
+      const result = await reportsCollection.insertOne(report);
+      res.send(result);
+    });
+    app.get("/reports", async (req, res) => {
+      const result = await reportsCollection.find().toArray();
+      res.send(result);
+    });
 
     await client.connect();
     // Send a ping to confirm a successful connection
