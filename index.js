@@ -9,6 +9,8 @@ app.use(express.json());
 const { MongoClient, ServerApiVersion, ObjectId } = require("mongodb");
 const uri = `mongodb+srv://${process.env.DB_NAME}:${process.env.DB_PASS}@cluster1.h19g7bt.mongodb.net/?appName=Cluster1`;
 
+const stripe = require("stripe")(process.env.STRIPE_SECRET);
+
 // Create a MongoClient with a MongoClientOptions object to set the Stable API version
 const client = new MongoClient(uri, {
   serverApi: {
@@ -234,6 +236,7 @@ async function run() {
      //reports related apis
     app.post("/reports", async (req, res) => {
       const report = req.body;
+      report.reportedAt = new Date();
       const result = await reportsCollection.insertOne(report);
       res.send(result);
     });
