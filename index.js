@@ -63,6 +63,12 @@ async function run() {
 
         const updatedUser = await usersCollection.findOne(userQuery);
         const userEmail = updatedUser.email;
+         await lessonsCollection.updateMany(
+          { email: userEmail },
+          {
+            $set: { authorImage: photoURL, name: displayName },
+          }
+        );
 
         await favoritesCollection.updateMany(
           { posterEmail: userEmail },
@@ -279,7 +285,7 @@ async function run() {
       const result = await favoritesCollection.updateMany(query, update);
       res.send(result);
     });
-    
+
     app.delete("/favorites/:id", async (req, res) => {
       const id = req.params.id;
       const query = { _id: new ObjectId(id) };
